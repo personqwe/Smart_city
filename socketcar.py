@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import os
 import socketio
+import time
+import threading
 
 sio = socketio.Client()
 
@@ -15,12 +17,18 @@ def disconnect():
 
 sio.connect('http://192.168.9.115:3000')  # MagicMirror 서버의 IP 주소로 변경
 
+distance_value = 0
+distance_lock = threading.Lock()
+
 # motor gpio pin 
 gpio_pin1 = 89  # Ringt side motor pin cw
 gpio_pin2 = 90  # Right side motor pin ccw
 gpio_pin3 = 65  # Left side motor pin cw
 gpio_pin4 = 66  # Left side motor pin ccw
+TRIG_PIN = 118  # GPIO pin number for trigger output
+ECHO_PIN = 120  # GPIO pin number for echo input
 data = ""
+cap = cv2.VideoCapture(1)
 
 # set TOPST GPIO directory
 gpio_path1 = f"/sys/class/gpio/gpio{gpio_pin1}"
@@ -28,13 +36,60 @@ gpio_path2 = f"/sys/class/gpio/gpio{gpio_pin2}"
 gpio_path3 = f"/sys/class/gpio/gpio{gpio_pin3}"  
 gpio_path4 = f"/sys/class/gpio/gpio{gpio_pin4}" 
 
-def export_gpio(gpio_num):
-    with open("/sys/class/gpio/export", "w") as file:
-        file.write(str(gpio_num))
+# GPIO initialization and release functions
+def gpio_setup(pin, direction):
+    # Export GPIO
+    with open('/sys/class/gpio/export', 'w') as export_file:
+        export_file.write(str(pin))
 
-def set_gpio_direction(gpio_num, direction):
-    with open(f"/sys/class/gpio/gpio{gpio_num}/direction", "w") as file:
-        file.write(direction)
+    # Configure direction
+    with open(f"/sys/class/gpio/gpio{pin}/direction", 'w') as f:
+        f.write(direction)
+
+def gpio_unexport(pin):
+    # Unexport GPIO
+    with open('/sys/class/gpio/unexport', 'w') as unexport_file:
+        unexport_file.write(str(pin))
+
+def gpio_write(pin, value):
+    with open(f"/sys/class/gpio/gpio{pin}/value", 'w') as f:
+        f.write(str(value))
+
+def gpio_read(pin):
+    with open(f"/sys/class/gpio/gpio{pin}/value", 'r') as f:
+        return int(f.read())
+def measure_distance():
+    pulse_start = 0
+    pulse_end = 0
+    # Initialize ultrasound transmission time
+    gpio_write(TRIG_PIN, 0)
+    time.sleep(0.2)  # Wait to reset
+
+    gpio_write(TRIG_PIN, 1)
+    time.sleep(0.00001)  # Emit ultrasound for 10 microseconds
+    gpio_write(TRIG_PIN, 0)
+
+    # Timing the echo pulse
+    while gpio_read(ECHO_PIN) == 0:
+        pulse_start = time.time()
+
+    while gpio_read(ECHO_PIN) == 1:
+        pulse_end = time.time()
+        
+    pulse_duration = pulse_end - pulse_start
+
+    # Calculate distance (speed of sound is 343m/s)
+    distance = pulse_duration * 17150
+
+    return distance
+
+def ultrasonic_thread():
+    global distance_value
+    while True:
+        distance = measure_distance()
+        with distance_lock:
+            distance_value = distance
+        time.sleep(0.1)  # 적절한 간격으로 거리 측정
 
 def set_motor_speed(gpio_num1, gpio_num2, gpio_num3, gpio_num4, speed1, speed2, speed3, speed4):
     with open(f"/sys/class/gpio/gpio{gpio_num1}/value", "w") as file1:
@@ -48,17 +103,6 @@ def set_motor_speed(gpio_num1, gpio_num2, gpio_num3, gpio_num4, speed1, speed2, 
 
     with open(f"/sys/class/gpio/gpio{gpio_num4}/value", "w") as file4:
         file4.write(str(speed4))
-
-# GPIO reset
-export_gpio(gpio_pin1)
-export_gpio(gpio_pin2)
-export_gpio(gpio_pin3)
-export_gpio(gpio_pin4)
-
-set_gpio_direction(gpio_pin1, "out")
-set_gpio_direction(gpio_pin2, "out")
-set_gpio_direction(gpio_pin3, "out")
-set_gpio_direction(gpio_pin4, "out")
 
 def DetectLineSlope(src):
     gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
@@ -106,79 +150,99 @@ def DetectLineSlope(src):
     mimg = cv2.addWeighted(src, 1, ccan, 1, 0)
     return mimg, degree_L, degree_R, rectangle
 
-# video capture reset
-cap = cv2.VideoCapture(2)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+def car():
+        # video capture reset
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-try:
-    while cap.isOpened():
-        ret, frame = cap.read()
-        frame = cv2.resize(frame, (640, 360))
-        mimg, l, r, rectangle = DetectLineSlope(frame)
-
-        if abs(l) <= 155 or abs(r) <= 155:
-            if l == 0 or r == 0:
-                if l < 0 or r < 0:
-                    print('left')
-                    set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                    data = "L"
-                    sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                elif l > 0 or r > 0:
-                    print('right')
-                    set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                    data = "R"
-                    sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-            elif abs(l - 15) > abs(r):
-                print('right')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                data = "R"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-            elif abs(r + 15) > abs(l):
-                print('left')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                data = "L"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-            else:
-                print('go')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 1, 0)
-                data = "F"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-        else:
-            if l > 155 or r > 155:
-                print('hard left')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                data = "L"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-            elif l < -155 or r < -155:
-                print('hard right')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                data = "R"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-            else:
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            frame = cv2.resize(frame, (640, 360))
+            mimg, l, r, rectangle = DetectLineSlope(frame)
+            cv2.polylines(mimg, [np.int32(rectangle)], True, (0, 255, 0), thickness=2)
+            cv2.imshow('car', mimg)
+            with distance_lock:
+                current_distance = distance_value
+            print(f"Distance: {current_distance:.2f} cm")
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            elif current_distance < 50:
                 print('stop')
                 set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
                 data = "S"
                 sio.emit('car', data)  # 문자열 데이터를 서버로 전송
 
-        # draw ROI Rectangle
-        cv2.polylines(mimg, [np.int32(rectangle)], True, (0, 255, 0), thickness=2)
+            else:
+                if abs(l) <= 155 or abs(r) <= 155:
+                    if l == 0 or r == 0:
+                        if l < 0 or r < 0:
+                            print('left')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                            data = "L"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        elif l > 0 or r > 0:
+                            print('right')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
+                            data = "R"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                    elif abs(l - 15) > abs(r):
+                        print('right')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
+                        data = "R"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                    elif abs(r + 15) > abs(l):
+                        print('left')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                        data = "L"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                    else:
+                        print('go')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 1, 0)
+                        data = "F"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                else:
+                    if l > 155 or r > 155:
+                        print('hard left')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                        data = "L"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                    elif l < -155 or r < -155:
+                        print('hard right')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
+                        data = "R"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                    else:
+                        print('stop')
+                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+                        data = "S"
+                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+        
+    except KeyboardInterrupt:
+        print("Keyboard interrupt received. Stopping motors.")
+        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+        cap.release()
+        cv2.destroyAllWindows()
+        gpio_unexport(gpio_pin1)
+        gpio_unexport(gpio_pin2)
+        gpio_unexport(gpio_pin3)
+        gpio_unexport(gpio_pin4)
+        gpio_unexport(TRIG_PIN)
+        gpio_unexport(ECHO_PIN)
+        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+        cap.release()
+        cv2.destroyAllWindows()
 
-        cv2.imshow('ImageWindow', mimg)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("Exiting the program. Stopping motors.")
-            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
-            break
 
-except KeyboardInterrupt:
-    print("Keyboard interrupt received. Stopping motors.")
-    set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
-    cap.release()
-    cv2.destroyAllWindows()
 
-# GPIO unexport
-os.system(f"echo {gpio_pin1} > /sys/class/gpio/unexport")
-os.system(f"echo {gpio_pin2} > /sys/class/gpio/unexport")
-os.system(f"echo {gpio_pin3} > /sys/class/gpio/unexport")
-os.system(f"echo {gpio_pin4} > /sys/class/gpio/unexport")
+if __name__ == '__main__':
+    # GPIO reset
+    gpio_setup(gpio_pin1, 'out')
+    gpio_setup(gpio_pin2, 'out')
+    gpio_setup(gpio_pin3, 'out')
+    gpio_setup(gpio_pin4, 'out')
+    gpio_setup(TRIG_PIN, 'out')
+    gpio_setup(ECHO_PIN, 'in')
+    ultrasonic_thread = threading.Thread(target=ultrasonic_thread, daemon=True)
+    ultrasonic_thread.start()
+    car()
