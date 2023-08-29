@@ -28,6 +28,7 @@ gpio_pin4 = 66  # Left side motor pin ccw
 TRIG_PIN = 118  # GPIO pin number for trigger output
 ECHO_PIN = 120  # GPIO pin number for echo input
 data = ""
+car_state = ""
 cap = cv2.VideoCapture(1)
 
 # set TOPST GPIO directory
@@ -89,7 +90,7 @@ def ultrasonic_thread():
         distance = measure_distance()
         with distance_lock:
             distance_value = distance
-        time.sleep(0.1)  # 적절한 간격으로 거리 측정
+        time.sleep(0.5)  # 적절한 간격으로 거리 측정
 
 def set_motor_speed(gpio_num1, gpio_num2, gpio_num3, gpio_num4, speed1, speed2, speed3, speed4):
     with open(f"/sys/class/gpio/gpio{gpio_num1}/value", "w") as file1:
@@ -150,6 +151,12 @@ def DetectLineSlope(src):
     mimg = cv2.addWeighted(src, 1, ccan, 1, 0)
     return mimg, degree_L, degree_R, rectangle
 
+@sio.on('Car_State')  # 'Car_State' 이벤트 수신
+def receive_car_state(data):
+    global car_state  # Declare car_state as a global variable
+    car_state = data  # Update car_state based on the received data
+    print("Received car state:", car_state)
+
 def car():
         # video capture reset
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -162,61 +169,69 @@ def car():
             mimg, l, r, rectangle = DetectLineSlope(frame)
             cv2.polylines(mimg, [np.int32(rectangle)], True, (0, 255, 0), thickness=2)
             cv2.imshow('car', mimg)
+            receive_car_state(car_state)
             with distance_lock:
                 current_distance = distance_value
             print(f"Distance: {current_distance:.2f} cm")
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            elif current_distance < 50:
-                print('stop')
-                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
-                data = "S"
-                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+            if car_state == 'start':
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                elif current_distance < 50:
+                    print('stop')
+                    set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+                    data = "S"
+                    sio.emit('beep', data)
 
-            else:
-                if abs(l) <= 155 or abs(r) <= 155:
-                    if l == 0 or r == 0:
-                        if l < 0 or r < 0:
-                            print('left')
-                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                            data = "L"
-                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                        elif l > 0 or r > 0:
+                else:
+                    if abs(l) <= 155 or abs(r) <= 155:
+                        if l == 0 or r == 0:
+                            if l < 0 or r < 0:
+                                print('left')
+                                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                                data = "L"
+                                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                            elif l > 0 or r > 0:
+                                print('right')
+                                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
+                                data = "R"
+                                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        elif abs(l - 15) > abs(r):
                             print('right')
                             set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
                             data = "R"
                             sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                    elif abs(l - 15) > abs(r):
-                        print('right')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                        data = "R"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                    elif abs(r + 15) > abs(l):
-                        print('left')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                        data = "L"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        elif abs(r + 15) > abs(l):
+                            print('left')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                            data = "L"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        else:
+                            print('go')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 1, 0)
+                            data = "F"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
                     else:
-                        print('go')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 1, 0)
-                        data = "F"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                else:
-                    if l > 155 or r > 155:
-                        print('hard left')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                        data = "L"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                    elif l < -155 or r < -155:
-                        print('hard right')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                        data = "R"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
-                    else:
-                        print('stop')
-                        set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
-                        data = "S"
-                        sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        if l > 155 or r > 155:
+                            print('hard left')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
+                            data = "L"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        elif l < -155 or r < -155:
+                            print('hard right')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
+                            data = "R"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                        else:
+                            print('stop')
+                            set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+                            data = "S"
+                            sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+            else:
+                print('stop')
+                set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+                data = "S"
+                sio.emit('car', data)  # 문자열 데이터를 서버로 전송
+                
         
     except KeyboardInterrupt:
         print("Keyboard interrupt received. Stopping motors.")
@@ -237,6 +252,8 @@ def car():
 
 if __name__ == '__main__':
     # GPIO reset
+    sio.emit('car1', "id값")  # 문자열 데이터를 서버로 전송
+    print('car1id값 전송')
     gpio_setup(gpio_pin1, 'out')
     gpio_setup(gpio_pin2, 'out')
     gpio_setup(gpio_pin3, 'out')
