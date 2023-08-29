@@ -68,7 +68,7 @@ module.exports = NodeHelper.create({
             socket.on('car', (obj) => {
                 console.log('Server car received data:', obj);
 
-                io.to(car2).emit('start', obj);
+                io.to(car2).emit('Car_State', obj);
             })
 
             socket.on('Play_Music', (obj) =>{
@@ -93,11 +93,25 @@ module.exports = NodeHelper.create({
                     currentTrackIndex = 0;
                     this.Beep();
                     this.sendSocketNotification("UPDATE_TEXT", 'Beep');
+                    io.to(car2).emit('Car_State', obj);
                     // 일정 지연 시간 후에 또는 beep 재생이 끝났을 때 플래그를 다시 false로 설정
                     setTimeout(() => {
                         beepInProgress = false;
                         this.Stop_Radio();
                     }, 3000);
+                }
+            });
+
+            socket.on('Car_State', (obj) => {
+                if(obj == 'start')
+                {
+                    io.to(car1).emit('Car_State', obj);
+                    console.log('car start');
+                }
+                if(obj == 'stop')
+                {
+                    io.to(car1).emit('Car_State', obj);
+                    console.log('car stop');
                 }
             });
 
