@@ -7,6 +7,7 @@ const sound = require('play-sound')(opts = {});
 var musicFiles = [];
 var musicFolder = '/root/MagicMirror/Music/';
 var currentTrackIndex = 0;
+var beepInProgress = false;
 module.exports = NodeHelper.create({
     start: function () {
         car1 = "";
@@ -87,9 +88,19 @@ module.exports = NodeHelper.create({
             })
 
             socket.on('beep', (obj) => {
-                console.log('정면에 장애물이 있습니다.', obj);
-
-            })
+                if (!beepInProgress) { // 이미 beep가 진행 중인지 체크
+                    beepInProgress = true; // 플래그를 true로 설정
+                    console.log('정면에 장애물이 있습니다.', obj);
+                    currentTrackIndex = 0;
+                    this.Beep();
+                    this.sendSocketNotification("UPDATE_TEXT", 'Beep');
+                    // 일정 지연 시간 후에 또는 beep 재생이 끝났을 때 플래그를 다시 false로 설정
+                    setTimeout(() => {
+                        beepInProgress = false;
+                        this.Stop_Radio();
+                    }, 3000);
+                }
+            });
 
             socket.on('disconnect', () => {
                 console.log('Client disconnected');
