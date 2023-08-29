@@ -18,7 +18,7 @@ def connect():
 def disconnect():
     print('서버와 연결이 끊어졌습니다.')
 
-@sio.on('start')  # 'start' 이벤트 수신
+@sio.on('Car_State')  # 'start' 이벤트 수신
 def receive_start_data(data):
     print("Received start data:", data)
     process_received_data(data)
