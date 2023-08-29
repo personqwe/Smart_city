@@ -42,6 +42,26 @@
     - 모듈 제작을 통한 커스텀 데이터
 
 
+TOPST 환경에서 ifconfig을 통해 ip 확인
+윈도우 환경에서 vs code로 원격접속을 통해 TOPST 보드 사용
+
+ex) TOPST ip: 192.xxx.x.xx → 윈도우 환경 vs code 원격접속 → ssh root@192.xxx.x.xx → 초기 비밀번호: root
+
+## 하드웨어 구성 리스트
+
+- TOPOST 보드 - gpio, pwm, uart 등 핀 사용 및 제어, 연산
+- 웹캠 - 차선 인식
+- DC 모터 4개 - 모터 구동
+- 바퀴 - 동적 움직임
+- L298N 모터 드라이버 - TOPST 보드에서 수용할 수 없는 전압 및 전류를 수용하여 DC 모터 구동
+- 14.8V DC 잭 베터리 - DC 모터 전원 공급
+- 수-수, 암-수 점퍼 케이블 - 핀 확장
+- 브레드 보드 - 케이블 정리
+- USB HUB - usb 포트 확장
+- wifi usb
+
+
+
 TOPST 외부 핀 번호
 
 
