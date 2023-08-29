@@ -2,7 +2,6 @@ var NodeHelper = require("node_helper");
 const socketIO = require('socket.io');
 const { exec } = require('child_process'); // 추가
 const fs = require('fs');
-const sound = require('play-sound')(opts = {});
 
 var musicFiles = [];
 var musicFolder = '/root/MagicMirror/Music/';
