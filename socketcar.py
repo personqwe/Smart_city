@@ -25,10 +25,12 @@ gpio_pin1 = 89  # Ringt side motor pin cw
 gpio_pin2 = 90  # Right side motor pin ccw
 gpio_pin3 = 65  # Left side motor pin cw
 gpio_pin4 = 66  # Left side motor pin ccw
+pwm_pin = 2
 TRIG_PIN = 118  # GPIO pin number for trigger output
 ECHO_PIN = 120  # GPIO pin number for echo input
 data = ""
 car_state = ""
+
 cap = cv2.VideoCapture(1)
 
 # set TOPST GPIO directory
@@ -36,6 +38,33 @@ gpio_path1 = f"/sys/class/gpio/gpio{gpio_pin1}"
 gpio_path2 = f"/sys/class/gpio/gpio{gpio_pin2}"
 gpio_path3 = f"/sys/class/gpio/gpio{gpio_pin3}"  
 gpio_path4 = f"/sys/class/gpio/gpio{gpio_pin4}" 
+pwm_path = "/sys/class/pwm/pwmchip0/"
+
+# PWM control functions
+def enable_pwm(pwm_pin):
+    with open(pwm_path + 'export', 'w') as export_file:
+        export_file.write(str(pwm_pin))
+
+def disable_pwm(pwm_pin):
+    with open(pwm_path + 'unexport', 'w') as unexport_file:
+        unexport_file.write(str(pwm_pin))
+
+# PWM 설정
+def set_pwm(pwm_pin, duty_cycle):
+    with open(os.path.join(pwm_path, f"pwm{pwm_pin}/period"), "w") as period_file:
+        period_file.write("2000000")  # 1MHz period
+
+    with open(os.path.join(pwm_path, f"pwm{pwm_pin}/duty_cycle"), "w") as duty_cycle_file:
+        duty_cycle_value = int(duty_cycle * 10000)  # Scale 0-100 to duty cycle
+        duty_cycle_file.write(str(duty_cycle_value))
+
+    with open(os.path.join(pwm_path, f"pwm{pwm_pin}/enable"), "w") as enable_file:
+        enable_file.write("1")
+
+# PWM 정지
+def stop_pwm(pwm_pin):
+    with open(os.path.join(pwm_path, f"pwm{pwm_pin}/enable"), "w") as enable_file:
+        enable_file.write("0")
 
 # GPIO initialization and release functions
 def gpio_setup(pin, direction):
@@ -173,6 +202,8 @@ def car():
             with distance_lock:
                 current_distance = distance_value
             print(f"Distance: {current_distance:.2f} cm")
+            set_pwm(pwm_pin, 40)  # 50% duty cycle
+            
             if car_state == 'start':
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -214,12 +245,14 @@ def car():
                         if l > 155 or r > 155:
                             print('hard left')
                             set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 1, 0, 0, 1)
-                            data = "L"
+                            data = "HL"
+                            set_pwm(pwm_pin, 60)  # 50% duty cycle
                             sio.emit('car', data)  # 문자열 데이터를 서버로 전송
                         elif l < -155 or r < -155:
                             print('hard right')
                             set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 1, 1, 0)
-                            data = "R"
+                            set_pwm(pwm_pin, 60)  # 50% duty cycle
+                            data = "HR"
                             sio.emit('car', data)  # 문자열 데이터를 서버로 전송
                         else:
                             print('stop')
@@ -236,6 +269,7 @@ def car():
     except KeyboardInterrupt:
         print("Keyboard interrupt received. Stopping motors.")
         set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
+        stop_pwm(pwm_pin)
         cap.release()
         cv2.destroyAllWindows()
         gpio_unexport(gpio_pin1)
@@ -244,6 +278,7 @@ def car():
         gpio_unexport(gpio_pin4)
         gpio_unexport(TRIG_PIN)
         gpio_unexport(ECHO_PIN)
+        disable_pwm(pwm_pin)
         set_motor_speed(gpio_pin1, gpio_pin2, gpio_pin3, gpio_pin4, 0, 0, 0, 0)
         cap.release()
         cv2.destroyAllWindows()
@@ -260,6 +295,7 @@ if __name__ == '__main__':
     gpio_setup(gpio_pin4, 'out')
     gpio_setup(TRIG_PIN, 'out')
     gpio_setup(ECHO_PIN, 'in')
+    enable_pwm(pwm_pin)
     ultrasonic_thread = threading.Thread(target=ultrasonic_thread, daemon=True)
     ultrasonic_thread.start()
     car()
